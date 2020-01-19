@@ -1,0 +1,1 @@
+web: java -jar build/libs/showcase.jar --vertx-id=showcase

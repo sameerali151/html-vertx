@@ -1,0 +1,104 @@
+plugins {
+    id 'groovy'
+    id 'application'
+    id 'com.github.johnrengelman.shadow' version '1.2.4'
+    id "com.eriwen.gradle.js" version "2.14.1"
+    id "com.eriwen.gradle.css" version "2.14.0"
+}
+
+group 'org.learning'
+version '1.0-SNAPSHOT'
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+    maven {
+        url "https://s3-us-west-2.amazonaws.com/org.learning.maven/snapshots"
+    }
+}
+
+dependencies {
+    compile 'org.codehaus.groovy:groovy-all:+'
+    compile "io.vertx:vertx-lang-groovy:+"
+    compile 'io.vertx:vertx-web:+'
+    compile "io.vertx:vertx-web-templ-jade:+"
+    compile 'org.learning:groovy-path:+'
+    compile 'org.tinylog:tinylog:+'
+    testCompile 'org.spockframework:spock-core:+'
+    testCompile 'junit:junit:+'
+}
+
+def webroot = "src/main/resources/webroot"
+import com.eriwen.gradle.js.tasks.MinifyJsTask
+import com.eriwen.gradle.css.tasks.MinifyCssTask
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+
+def taskIndex = 0
+task minify << {
+    def webrootFile = new File(webroot)
+    webrootFile.eachFileRecurse { file ->
+        def dynamicTask = "minify${taskIndex++}"
+        def sourcePath = file.path
+        def destPath = ['build', 'resources', 'main', 'webroot', sourcePath.replace(webrootFile.path + File.separator, '')].join(File.separator)
+        if(file.name.endsWith('.js')) {
+            task "$dynamicTask"(type: MinifyJsTask) {
+                source = file.path
+                dest = destPath
+                closure {
+                    warningLevel = "QUIET"
+                    compilerOptions.languageIn = "ECMASCRIPT5"
+                }
+            }
+            tasks."$dynamicTask".execute()
+        } else if(file.name.endsWith('.css')) {
+            task "$dynamicTask"(type: MinifyCssTask) {
+                source = file.path
+                dest = destPath
+            }
+            tasks."$dynamicTask".execute()
+        }
+    }
+}
+
+mainClassName = 'io.vertx.core.Launcher'
+// absolutley crtical to use the prefix groovy here
+// so the proper verticle factory will be used.
+def mainVerticleName = 'groovy:org.learning.showcase.Showcase'
+
+// Vert.x watches for file changes in all subdirectories
+// of src/ but only for files with .groovy extension
+def watchForChange = 'src/**/*.groovy'
+
+// Vert.x will call this task on changes
+def doOnChange
+if (System.getProperty("os.name").toLowerCase().contains("windows")) {
+    doOnChange = '.\\gradlew shadowJar'
+} else {
+    doOnChange = './gradlew shadowJar'
+}
+
+run {
+    args = ['run', mainVerticleName, "--redeploy=$watchForChange", "--launcher-class=$mainClassName", "--on-redeploy=$doOnChange"]
+}
+
+shadowJar {
+    archiveName = "showcase.jar"
+    manifest {
+        attributes "Main-Verticle": mainVerticleName
+    }
+    mergeServiceFiles {
+        include 'META-INF/services/io.vertx.core.spi.VerticleFactory'
+    }
+}
+
+task shadowJarMin(type: ShadowJar, dependsOn: 'minify') {
+    archiveName = "showcase.jar"
+    manifest.attributes 'Main-Verticle': mainVerticleName, 'Main-Class': "$mainClassName"
+    mergeServiceFiles {
+        include 'META-INF/services/io.vertx.core.spi.VerticleFactory'
+    }
+    from(project.convention.getPlugin(JavaPluginConvention).sourceSets.main.output)
+    configurations = [project.configurations.runtime]
+}
+
+task stage(dependsOn: ['shadowJarMin'])
